@@ -164,6 +164,8 @@ def main():
                 )
                 rec.update(status="ok", **stats)
             except Exception as e:  # per-video failure: log, keep going
+                import traceback
+                traceback.print_exc()
                 rec.update(status="error", error=repr(e))
             fidx.write(json.dumps(rec) + "\n")
             fidx.flush()

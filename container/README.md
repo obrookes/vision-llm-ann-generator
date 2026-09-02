@@ -8,9 +8,14 @@
 
 ```
 export APPTAINER_CACHEDIR=$SCRATCH/apptainer-cache
-export APPTAINER_TMPDIR=$SCRATCH/apptainer-cache/tmp
+# Def-file builds (unlike plain docker:// pulls) chown files in the build temp dir, which Lustre
+# refuses ("ownership change not allowed"), and the final rootfs->sandbox copy onto Lustre also
+# failed ("archive/tar: missed writing ... unexpected EOF"). So build entirely on the login node's
+# local disk (/local, 3 TB), then copy the finished sandbox to $SCRATCH as plain files.
+export APPTAINER_TMPDIR=/local/user/$(id -u)/apptainer-tmp TMPDIR=/local/user/$(id -u)/apptainer-tmp
 mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
-apptainer build --sandbox "$SCRATCH/containers/sam3-sandbox" container/sam3.def
+apptainer build --sandbox /local/user/$(id -u)/sam3-sandbox container/sam3.def
+cp -a /local/user/$(id -u)/sam3-sandbox "$SCRATCH/containers/sam3-sandbox"
 NAME=sam3 sbatch slurm/build_sif.sbatch     # sandbox -> $SCRATCH/containers/sam3.sif on a compute node
 ```
 
