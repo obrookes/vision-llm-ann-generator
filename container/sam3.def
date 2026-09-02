@@ -1,0 +1,60 @@
+Bootstrap: docker
+# nvcr.io/nvidia/pytorch:25.06-py3: NGC's PyTorch container has published multi-arch (amd64+arm64)
+# manifests since the 24.xx series, so this pulls natively on the GH200 (aarch64) login node with no
+# QEMU/emulation needed. The 25.06 tag ships Python 3.12 and PyTorch 2.7.x built against CUDA 12.9,
+# which satisfies SAM3's stated floor (Python >= 3.12, torch >= 2.7, CUDA >= 12.6) with headroom.
+# If 25.06 is unavailable when building, any newer nvcr.io/nvidia/pytorch:<YY.MM>-py3 tag works too --
+# check https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/ for the Python/torch/
+# CUDA versions of that tag before swapping it in.
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    python3 -m pip install --no-cache-dir --upgrade pip
+
+    # SAM3 (official facebookresearch repo, not the ultralytics fork) + overlay/track deps.
+    # This is the step most likely to be killed by the login-node build cgroup (4 GiB / 500 pids) --
+    # if it dies here, see container/README.md for the base-image + bind-mounted-venv fallback.
+    # Pin the NGC-built torch/torchvision so sam3's dependency resolution cannot replace them with
+    # PyPI wheels (which would drop the GH200-tuned CUDA build).
+    python3 -c 'import torch, torchvision; print(f"torch=={torch.__version__}\ntorchvision=={torchvision.__version__}")' > /tmp/constraints.txt
+    cat /tmp/constraints.txt
+    PIP_CONSTRAINT=/tmp/constraints.txt python3 -m pip install --no-cache-dir \
+        "git+https://github.com/facebookresearch/sam3.git" \
+        pycocotools \
+        opencv-python-headless
+
+%environment
+    export HF_HUB_OFFLINE=1
+    export PYTHONUNBUFFERED=1
+
+%runscript
+    exec python3 "$@"
+
+%labels
+    Author          obrookes
+    Base_Image      nvcr.io/nvidia/pytorch:25.06-py3
+    Description     SAM3 (facebookresearch/sam3) text-prompted video annotation
+
+%help
+    SAM3 container for vision-llm-ann-generator: text-prompted video segmentation/tracking with
+    the official facebookresearch/sam3 predictor.
+
+    Build (login node has network but a tight cgroup: 4 GiB / 500 pids -- pull+extract as a
+    sandbox rather than a single-file SIF, which dies in mksquashfs):
+
+        export APPTAINER_CACHEDIR=$SCRATCH/apptainer-cache
+        export APPTAINER_TMPDIR=$SCRATCH/apptainer-cache/tmp
+        mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
+        apptainer build --sandbox "$SCRATCH/containers/sam3-sandbox" container/sam3.def
+
+    Then convert the sandbox to a SIF on a compute node (mksquashfs is not cgroup-limited there):
+
+        NAME=sam3 sbatch slurm/build_sif.sbatch
+
+    This produces $SCRATCH/containers/sam3.sif. slurm/run.sh looks for that file and falls back to
+    the sandbox directory if the SIF hasn't been built yet.
+
+    If the %post pip install of sam3 is OOM/pid-killed on the login node, see container/README.md
+    for the venv-on-$SCRATCH fallback.
