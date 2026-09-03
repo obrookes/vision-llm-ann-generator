@@ -4,6 +4,11 @@
 
 - `<stem>.json` — one tracks document per video (below).
 - `<stem>.mp4` — an overlay video rendered from that document (unless `--no-overlay`).
+  By default this contains **only the sampled frames**, at `sample_fps` (i.e. exactly
+  what the model saw — 4-5x smaller/faster to render than the source at the default 6
+  fps sampling). Pass `--overlay-all-frames` to `annotate.py` for a full-source-rate
+  overlay instead, where frames between sampled ones hold the most recently annotated
+  frame's objects (see `overlay.py::render`, `sampled_only` arg).
 - `index.jsonl` — one status line per processed video, appended as the run progresses.
 
 `<stem>` is the flattened path (see `tracks.stem_for`): the video path relative to
@@ -24,6 +29,9 @@ collisions across cameras/missions in the corpus (e.g.
   "width": 720,
   "height": 404,
   "n_frames": 1800,
+  "mode": "video",
+  "sample_fps": 6.0,
+  "n_frames_sampled": 360,
   "frames": [
     {
       "frame": 0,
@@ -52,13 +60,32 @@ Field notes:
 - `fps`, `width`, `height`, `n_frames` — probed from the source video with OpenCV
   (`n_frames` is the *source* frame count via `CAP_PROP_FRAME_COUNT`, which may exceed
   the number of entries in `frames` if `--max-frames` truncated tracking).
-- `frames` — one entry per tracked frame, **in ascending frame order**. Frames with no
-  detected objects are still listed, with `"objects": []` — do not assume a missing
-  frame index means "no objects"; a genuinely absent frame index means tracking did not
-  reach that frame (e.g. `--max-frames` truncation).
-- `frames[].frame` — 0-based frame index into the source video.
-- `frames[].objects[].id` — SAM3's per-video object id (stable across frames within one
-  video; **not** unique across videos).
+- `mode` — optional, `"video"` or `"image"`; which inference path produced this doc (see
+  below). Absent in docs written before this field existed; treat a missing value as
+  `"video"`.
+- `sample_fps` — optional, the effective frame rate SAM3 actually processed this video
+  at (e.g. `6.0`). `null`/absent means every source frame was processed (no
+  subsampling). This is independent of `fps` above, which is always the *source*
+  video's fps.
+- `n_frames_sampled` — optional, the number of frames actually processed (i.e. the
+  length of `frames` when tracking wasn't truncated by `--max-frames`).
+- `frames` — one entry per tracked/processed frame, **in ascending frame order**. Frames
+  with no detected objects are still listed, with `"objects": []` — do not assume a
+  missing frame index means "no objects"; a genuinely absent frame index means tracking
+  did not reach that frame (e.g. `--max-frames` truncation) **or** that frame was not
+  sampled (see below).
+- `frames[].frame` — **always** the 0-based frame index into the *source* video, even
+  when subsampled. With subsampling, `frames` lists only the sampled indices, not every
+  integer — e.g. a 24 fps source subsampled to `sample_fps: 6.0` produces entries at
+  source indices `0, 4, 8, 12, ...` (stride = `round(fps / sample_fps)`), not `0, 1, 2,
+  3, ...`. Do not assume consecutive entries differ by 1; use the `frame` value, not the
+  entry's position in the list.
+- `frames[].objects[].id` — meaning depends on `mode`:
+  - `mode: "video"` — SAM3's per-video object/track id (stable across frames within one
+    video; **not** unique across videos).
+  - `mode: "image"` — a per-frame detection index (`0..n-1` for that frame only). It is
+    **not** stable across frames — the same physical object can have a different `id`
+    on the next processed frame. Image mode has no temporal tracking.
 - `frames[].objects[].score` — SAM3's detection/tracking probability for this object on
   this frame (`null` if unavailable). If `--score-thresh` was set, only objects at or
   above that threshold are present.
@@ -81,7 +108,8 @@ run is resumable and progress is visible while it's in flight:
 
 ```json
 {"video": "...", "stem": "...", "status": "ok", "n_frames": 1800, "n_tracks": 4,
- "max_concurrent": 2, "seconds": 12.3, "prompt": "animal", "checkpoint": "sam3-safari-pos.pt"}
+ "max_concurrent": 2, "seconds": 12.3, "prompt": "animal", "checkpoint": "sam3-safari-pos.pt",
+ "mode": "video", "sample_fps": 6.0, "n_frames_sampled": 360, "fps_processed": 29.3}
 {"video": "...", "stem": "...", "status": "error", "error": "RuntimeError(...)",
  "prompt": "animal", "checkpoint": "sam3-safari-pos.pt"}
 ```
@@ -94,6 +122,13 @@ run is resumable and progress is visible while it's in flight:
   frame.
 - `seconds` — wall-clock time to process this one video (tracking + write + overlay
   render), present only on `status: "ok"`.
+- `mode` — optional, `"video"` or `"image"`, mirrors the tracks JSON field.
+- `sample_fps` — optional, mirrors the tracks JSON field (`null`/absent = every frame
+  processed).
+- `n_frames_sampled` — optional, mirrors the tracks JSON field.
+- `fps_processed` — optional, throughput in *sampled* frames per wall-clock second
+  (`n_frames_sampled / seconds`), i.e. the number that reflects how fast this run is
+  actually going, as opposed to `n_frames` (source frame count) divided by `seconds`.
 
 Resume behaviour: `annotate.py` skips a video if `<out>/<stem>.json` already exists,
 unless `--overwrite` is given. This is checked by file existence, not by `index.jsonl`

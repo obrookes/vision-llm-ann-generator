@@ -13,6 +13,8 @@ if [ -z "${PROMPT:-}" ]; then
 fi
 
 CHECKPOINT="${CHECKPOINT:-$SCRATCH/weights/sam3/sam3-safari-pos.pt}"
+MODE="${MODE:-video}"
+SAMPLE_FPS="${SAMPLE_FPS:-6}"
 
 SIF="${SIF:-$SCRATCH/containers/sam3.sif}"
 [ -e "$SIF" ] || SIF="$SCRATCH/containers/sam3-sandbox"   # login-node mksquashfs fails (pids limit); sandbox works too
@@ -30,7 +32,9 @@ SHARD="outputs/shards/$(basename "$MANIFEST" .txt)_${I}_of_${N}.txt"
 awk -v n="$N" -v i="$I" 'NR % n == i' "$MANIFEST" > "$SHARD"
 
 PROMPT_SLUG=$(echo "$PROMPT" | tr ' ' '_')
-OUT="${OUT:-outputs/$(basename "$MANIFEST" .txt)_${PROMPT_SLUG}}"
+OUT_SUFFIX=""
+[ "$MODE" = "video" ] || OUT_SUFFIX="_${MODE}"
+OUT="${OUT:-outputs/$(basename "$MANIFEST" .txt)_${PROMPT_SLUG}${OUT_SUFFIX}}"
 mkdir -p "$OUT"
 
 export APPTAINERENV_HF_HOME="$SCRATCH/hf-cache"
@@ -55,7 +59,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     GPUS=$(nvidia-smi -L | wc -l)
 fi
 
-echo "== run.sh: MANIFEST=$SHARD PROMPT=$PROMPT CHECKPOINT=$CHECKPOINT OUT=$OUT SIF=$SIF task=${I}/${N} GPUs=$GPUS =="
+echo "== run.sh: MANIFEST=$SHARD PROMPT=$PROMPT CHECKPOINT=$CHECKPOINT MODE=$MODE SAMPLE_FPS=$SAMPLE_FPS OUT=$OUT SIF=$SIF task=${I}/${N} GPUs=$GPUS =="
 
 START=$(date +%s)
 
@@ -64,6 +68,8 @@ apptainer exec --nv --bind "/lus,/scratch,$HOME" "$SIF" \
         --manifest "$SHARD" \
         --prompt "$PROMPT" \
         --checkpoint "$CHECKPOINT" \
+        --mode "$MODE" \
+        --sample-fps "$SAMPLE_FPS" \
         --out "$OUT" \
         --index-name "index_${I}_of_${N}.jsonl" \
         ${EXTRA_ARGS}
