@@ -10,7 +10,7 @@
 setsid -f nohup container/build_sandbox.sh > $SCRATCH/logs/build-sam3-sandbox.log 2>&1 < /dev/null
 # ... ~25 min: pulls nvcr.io/nvidia/pytorch:25.06-py3, pip-installs sam3 (torch stays pinned at the
 #     NGC build, 2.8.0a0+nv25.06), tars the sandbox to $SCRATCH/containers/sam3-sandbox.tar (25 GB)
-NAME=sam3 sbatch slurm/build_sif.sbatch      # untars to node /tmp, writes $SCRATCH/containers/sam3.sif
+NAME=sam3 sbatch slurm/build_sif.sbatch      # untars to node /tmp (tmpfs, --mem=240G), writes $SCRATCH/containers/sam3.sif
 ```
 
 Things that do NOT work on this login node, which is why the script looks the way it does:
@@ -22,7 +22,13 @@ Things that do NOT work on this login node, which is why the script looks the wa
 - `apptainer build sam3.sif <sandbox>` on the login node (mksquashfs dies in the session cgroup;
   apptainer 1.4.1 here has no `--mksquashfs-procs/-mem` flags to cap it).
 
-Streaming `tar -cf` onto Lustre and unpacking on a compute node works. `slurm/run.sh` looks for
+- unpacking the sandbox onto `$SCRATCH` and packing from there: scratch has a project quota of
+  1,024,000 files (check `lfs quota -p $(lfs project -d $SCRATCH | cut -d' ' -f1) /scratch`), a
+  sandbox tree is ~300k files, and apptainer stages a second rootfs copy in its tmpdir, so the pack
+  fails with "disk quota exceeded" once the old vLLM sandboxes are also sitting there. Keep only the
+  tarball on scratch; do unpack + pack on node tmpfs with enough `--mem`.
+
+Streaming `tar -cf` onto Lustre and unpacking on a compute node's tmpfs works. `slurm/run.sh` looks for
 `$SCRATCH/containers/sam3.sif` first and falls back to `$SCRATCH/containers/sam3-sandbox` if you
 chose to unpack the tarball there instead.
 
