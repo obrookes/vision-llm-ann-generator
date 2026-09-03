@@ -5,28 +5,21 @@ inside functions/methods so the rest of the package (tracks.py, overlay.py,
 manifest.py, annotate.py --no-overlay paths, tests) runs fine on a CPU-only login
 node without sam3 or torch installed.
 
-SAM3 official API (facebookresearch/sam3, sam3/model_builder.py +
-sam3/model/sam3_video_inference.py):
+SAM3 API as installed (sam3 0.1.0 from facebookresearch/sam3, checked inside the container):
     from sam3.model_builder import build_sam3_video_predictor
-    predictor.handle_request(request=dict(type="start_session", resource_path=video_path))
-        -> response["session_id"]
-    predictor.handle_request(dict(type="add_prompt", session_id=..., frame_index=0, text=prompt))
-    predictor.handle_request(dict(type="propagate_in_video", session_id=...))
-        -> per-frame outputs with out_obj_ids, out_probs, out_boxes_xywh (normalised 0-1),
-           out_binary_masks (N,H,W bool)
-    predictor.handle_request(dict(type="close_session", session_id=...))
+    predictor = build_sam3_video_predictor(checkpoint_path=<local .pt>)   # HF download only if None
+    predictor.handle_request(dict(type="start_session", resource_path=video)) -> {"session_id"}
+    predictor.handle_request(dict(type="add_prompt", session_id, frame_index=0, text=prompt,
+                                  output_prob_thresh=0.5))
+    predictor.handle_stream_request(dict(type="propagate_in_video", session_id,
+                                         propagation_direction="forward", ...))
+        -> yields {"frame_index": i, "outputs": {out_obj_ids, out_probs,
+                   out_boxes_xywh (normalised), out_binary_masks (N,H,W bool)}}
+    predictor.handle_request(dict(type="close_session", session_id))
+The BPE tokenizer is bundled in the package (sam3/assets/bpe_simple_vocab_16e6.txt.gz).
 
-Confirmed from source (sam3/model_builder.py): build_sam3_video_predictor(*args,
-gpus_to_use=None, **kwargs) forwards kwargs to build_sam3_video_model(checkpoint_path:
-str|None=None, load_from_HF=True, bpe_path=None, device="cuda", compile=False, ...).
-We call it with checkpoint_path=<local .pt> and load_from_HF=False so it loads our
-local SA-FARI weights instead of pulling from the Hub. The BPE tokenizer is bundled in
-the package (sam3/assets/bpe_simple_vocab_16e6.txt.gz), so no HF/network download is
-needed for text prompts.
-
-Whether propagate_in_video returns a generator of (frame_idx, out) tuples vs. a
-dict/list is still unconfirmed -- this wrapper handles both defensively; see
-CONFIRM ON FIRST GPU RUN below.
+Propagation goes through handle_stream_request (a generator of
+{"frame_index", "outputs"} dicts); _iter_propagation still tolerates the other shapes.
 """
 from __future__ import annotations
 
@@ -43,17 +36,12 @@ class Sam3Runner:
             return self._predictor
         from sam3.model_builder import build_sam3_video_predictor
 
-        # Confirmed API: build_sam3_video_predictor(**kwargs) forwards to
-        # build_sam3_video_model(checkpoint_path=..., load_from_HF=False, device=...).
-        # load_from_HF=False so it loads our local SA-FARI .pt instead of the Hub default.
-        try:
-            predictor = build_sam3_video_predictor(
-                checkpoint_path=self.checkpoint, load_from_HF=False, device=self.device
-            )
-        except TypeError:
-            # CONFIRM ON FIRST GPU RUN: fall back in case the kwarg name differs across
-            # sam3 versions.
-            predictor = build_sam3_video_predictor(ckpt_path=self.checkpoint, device=self.device)
+        # Confirmed against the installed package (sam3 0.1.0, 2026-09-03): build_sam3_video_predictor
+        # returns Sam3VideoPredictorMultiGPU(*args, gpus_to_use=None, **kwargs) whose per-GPU
+        # Sam3VideoPredictor.__init__(checkpoint_path=None, bpe_path=None, ..., compile=False) calls
+        # build_sam3_video_model(checkpoint_path=...) and .cuda()s the model. The HF download only
+        # happens when checkpoint_path is None, so a local .pt path is enough (no load_from_HF kwarg).
+        predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint)
         self._predictor = predictor
         return predictor
 
@@ -73,13 +61,21 @@ class Sam3Runner:
             )
             session_id = start_resp["session_id"] if isinstance(start_resp, dict) else start_resp
 
-            predictor.handle_request(
-                dict(type="add_prompt", session_id=session_id, frame_index=0, text=prompt)
-            )
+            prompt_kwargs = dict(type="add_prompt", session_id=session_id, frame_index=0, text=prompt)
+            if self.score_thresh is not None:
+                prompt_kwargs["output_prob_thresh"] = self.score_thresh
+            predictor.handle_request(prompt_kwargs)
 
-            prop_resp = predictor.handle_request(
-                dict(type="propagate_in_video", session_id=session_id)
-            )
+            # propagate_in_video is a streaming request: handle_stream_request yields
+            # {"frame_index": i, "outputs": {...}} per frame (default direction "both"; the prompt is
+            # on frame 0 so "forward" covers the whole clip).
+            prop_kwargs = dict(type="propagate_in_video", session_id=session_id,
+                               propagation_direction="forward", start_frame_index=0)
+            if max_frames is not None:
+                prop_kwargs["max_frame_num_to_track"] = max_frames
+            if self.score_thresh is not None:
+                prop_kwargs["output_prob_thresh"] = self.score_thresh
+            prop_resp = predictor.handle_stream_request(prop_kwargs)
 
             results = []
             for frame_idx, out in self._iter_propagation(prop_resp):
@@ -98,8 +94,8 @@ class Sam3Runner:
     def _iter_propagation(prop_resp):
         """Normalise propagate_in_video's response into an iterable of (frame_idx, out).
 
-        CONFIRM ON FIRST GPU RUN: whether this is a generator of (frame_idx, out) tuples,
-        a dict keyed by frame_idx, or a list of per-frame dicts carrying their own index.
+        The installed sam3 yields {"frame_index", "outputs"} dicts; the other shapes are kept
+        for robustness against future versions.
         """
         # Generator / iterable of (frame_idx, out) tuples.
         if hasattr(prop_resp, "__iter__") and not isinstance(prop_resp, dict):
