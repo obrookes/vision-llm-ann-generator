@@ -39,6 +39,15 @@ export APPTAINERENV_TMPDIR=/tmp
 export APPTAINERENV_PYTHONUNBUFFERED=1
 export APPTAINERENV_TORCHINDUCTOR_CACHE_DIR="$SCRATCH/torch-cache"
 export APPTAINERENV_TRITON_CACHE_DIR="$SCRATCH/triton-cache"
+# Triton (used by sam3.perflib NMS kernels) finds libcuda via `ldconfig -p`, which inside the NGC
+# image points at /usr/local/cuda/compat/lib (absent on the node), and it links with -lcuda so it
+# needs a `libcuda.so` name, while `apptainer --nv` only provides libcuda.so.1 under
+# /.singularity.d/libs. Give it a dir with both names (symlink targets resolve inside the container).
+TRITON_LIBCUDA_DIR="$SCRATCH/lib/triton-libcuda"
+mkdir -p "$TRITON_LIBCUDA_DIR"
+ln -sfn /.singularity.d/libs/libcuda.so.1 "$TRITON_LIBCUDA_DIR/libcuda.so.1"
+ln -sfn /.singularity.d/libs/libcuda.so.1 "$TRITON_LIBCUDA_DIR/libcuda.so"
+export APPTAINERENV_TRITON_LIBCUDA_PATH="$TRITON_LIBCUDA_DIR"
 
 GPUS=0
 if command -v nvidia-smi >/dev/null 2>&1; then
