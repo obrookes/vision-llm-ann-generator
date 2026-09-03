@@ -94,16 +94,17 @@ Mirrors this repo's sibling verifier's `slurm/run_vllm.sh` conventions (thin sba
 header, `awk 'NR % n == i'` sharding, `APPTAINERENV_*` exports, `TMPDIR=/tmp` forced
 inside the container).
 
-## Measured (2026-09-03, smoke clip 03190251.MP4, 1454 frames @ 24 fps, 720x404, 1 GH200)
+## Measured (2026-09-03, 1 GH200, prompt "chimpanzee", sam3-safari-pos.pt)
 
-| phase | time |
-|---|---|
-| engine start (model load + Triton NMS kernel compile, first run) | ~1 min |
-| track 1454 frames, prompt "chimpanzee" | 5 min 09 s (~4.7 fps) |
+| run | clips | frames | wall | fps | videos/min/GPU |
+|---|---|---|---|---|---|
+| smoke (03190251.MP4, 720x404 @ 24 fps, first run incl. Triton compile) | 1 | 1454 | 5 min 32 s | 4.4 | 0.18 |
+| dev8 (corpus MP4s, `manifests/dev8.txt`) | 8 | 11632 | 22 min | 8.9 | 0.37 |
 
-8 tracks, max 6 concurrent, 2.5 MB tracks JSON, 29 MB overlay mp4. SAM3 runs every frame at
-1008 px, so a 60 s clip costs ~5 GPU-min; the 60k corpus would be ~5000 GPU-h at this rate.
-Frame subsampling / lower resolution are the obvious levers and are not implemented yet.
+Engine start (model load + Triton NMS kernel compile) is ~1 min per task. SAM3 runs every frame
+at 1008 px, so a clip costs ~2.7 GPU-min and the 59,656-clip corpus would be ~2719 GPU-h
+(~680 node-h) at this rate. Frame subsampling / lower resolution are the obvious levers
+and are not implemented yet. Smoke clip: 8 tracks, max 6 concurrent, 2.5 MB tracks JSON, 29 MB overlay.
 
 ## Gotchas
 
