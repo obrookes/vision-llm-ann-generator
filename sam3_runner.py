@@ -45,9 +45,9 @@ def checkpoint_variant(checkpoint: str) -> str:
 
 
 def _patch_segmentation_head_with_presence():
-    """Make model_builder._create_segmentation_head build a UniversalSegmentationHead with
-    presence_head=True and a DotProductScoring scorer (keys presence_head.{prompt_mlp,prompt_proj,
-    hs_proj}), matching the SA-FARI checkpoints. Idempotent. Note the video inference path never
+    """Make the model match the SA-FARI checkpoints: a segmentation head with a DotProductScoring
+    presence head (keys presence_head.{prompt_mlp,prompt_proj,hs_proj}) and a decoder without the
+    presence token. Idempotent. Note the video inference path never
     reads the head's presence_logit, so this only exists to satisfy strict state-dict loading."""
     from sam3 import model_builder as mb
 
@@ -61,6 +61,20 @@ def _patch_segmentation_head_with_presence():
         return head
 
     mb._create_segmentation_head = patched
+
+    # sam3 0.1.0's _create_sam3_transformer(has_presence_token=...) ignores the flag and
+    # _create_transformer_decoder hard-codes presence_token=True, so strip the decoder presence
+    # token here as well (the decoder forward checks `self.presence_token is not None`).
+    orig_dec = mb._create_transformer_decoder
+
+    def patched_dec(*args, **kwargs):
+        dec = orig_dec(*args, **kwargs)
+        dec.presence_token = None
+        dec.presence_token_head = None
+        dec.presence_token_out_norm = None
+        return dec
+
+    mb._create_transformer_decoder = patched_dec
     mb._presence_head_patched = True
 
 
