@@ -4,25 +4,27 @@
 `pycocotools`, and `opencv-python-headless` on top of an NGC PyTorch base
 (arm64, Python 3.12, torch >= 2.7, CUDA 12.x).
 
-## Normal path
+## Normal path (confirmed 2026-09-03)
 
 ```
-export APPTAINER_CACHEDIR=$SCRATCH/apptainer-cache
-# Def-file builds (unlike plain docker:// pulls) chown files in the build temp dir, which Lustre
-# refuses ("ownership change not allowed"), and the final rootfs->sandbox copy onto Lustre also
-# failed ("archive/tar: missed writing ... unexpected EOF"). So build entirely on the login node's
-# local disk (/local, 3 TB), then copy the finished sandbox to $SCRATCH as plain files.
-export APPTAINER_TMPDIR=/local/user/$(id -u)/apptainer-tmp TMPDIR=/local/user/$(id -u)/apptainer-tmp
-mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
-apptainer build --sandbox /local/user/$(id -u)/sam3-sandbox container/sam3.def
-cp -a /local/user/$(id -u)/sam3-sandbox "$SCRATCH/containers/sam3-sandbox"
-NAME=sam3 sbatch slurm/build_sif.sbatch     # sandbox -> $SCRATCH/containers/sam3.sif on a compute node
+setsid -f nohup container/build_sandbox.sh > $SCRATCH/logs/build-sam3-sandbox.log 2>&1 < /dev/null
+# ... ~25 min: pulls nvcr.io/nvidia/pytorch:25.06-py3, pip-installs sam3 (torch stays pinned at the
+#     NGC build, 2.8.0a0+nv25.06), tars the sandbox to $SCRATCH/containers/sam3-sandbox.tar (25 GB)
+NAME=sam3 sbatch slurm/build_sif.sbatch      # untars to node /tmp, writes $SCRATCH/containers/sam3.sif
 ```
 
-`slurm/run.sh` looks for `$SCRATCH/containers/sam3.sif` first and falls back to
-`$SCRATCH/containers/sam3-sandbox` if the SIF hasn't been built yet, so the sandbox alone is enough
-to run jobs -- `build_sif.sbatch` just makes startup faster and avoids keeping an unpacked sandbox
-around.
+Things that do NOT work on this login node, which is why the script looks the way it does:
+
+- building straight onto `$SCRATCH`: def-file builds chown files in the build tmp dir
+  ("ownership change not allowed"), and even with `TMPDIR` on local disk the final rootfs->sandbox
+  copy onto Lustre dies ("archive/tar: missed writing ... unexpected EOF");
+- `cp -a` of the finished 25 GB sandbox tree onto `$SCRATCH` (killed);
+- `apptainer build sam3.sif <sandbox>` on the login node (mksquashfs dies in the session cgroup;
+  apptainer 1.4.1 here has no `--mksquashfs-procs/-mem` flags to cap it).
+
+Streaming `tar -cf` onto Lustre and unpacking on a compute node works. `slurm/run.sh` looks for
+`$SCRATCH/containers/sam3.sif` first and falls back to `$SCRATCH/containers/sam3-sandbox` if you
+chose to unpack the tarball there instead.
 
 ## Fallback: login-node cgroup kills the pip install
 
