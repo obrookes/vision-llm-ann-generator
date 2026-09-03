@@ -358,10 +358,16 @@ class Sam3Runner:
     def _track_image(self, pil_frames: list, frame_indices: list[int], prompt: str) -> list[dict]:
         model, processor = self._load_image_model()
 
+        import torch
+
         results = []
         for source_idx, pil in zip(frame_indices, pil_frames):
-            state = processor.set_image(pil)
-            state = processor.set_text_prompt(prompt=prompt, state=state)
+            # The video path runs under @torch.autocast(bfloat16) (sam3_video_inference.py:800,908);
+            # the image processor does not, and the ViT trunk mixes bf16 activations with fp32
+            # weights without it ("mat1 and mat2 must have the same dtype"). Match the video path.
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                state = processor.set_image(pil)
+                state = processor.set_text_prompt(prompt=prompt, state=state)
 
             boxes_xyxy = self._to_numpy(state["boxes"])  # xyxy, ORIGINAL pixels
             masks = self._to_numpy(state["masks"])  # bool, (N, H, W) or (N, 1, H, W)
@@ -450,7 +456,9 @@ class Sam3Runner:
 
     @staticmethod
     def _to_numpy(x):
-        if hasattr(x, "cpu"):  # torch tensor
+        if hasattr(x, "cpu"):  # torch tensor (may be bf16 under autocast; numpy has no bf16)
+            if hasattr(x, "is_floating_point") and x.is_floating_point():
+                x = x.float()
             x = x.cpu().numpy()
         import numpy as np
 
@@ -458,7 +466,9 @@ class Sam3Runner:
 
     @staticmethod
     def _to_list(x):
-        if hasattr(x, "cpu"):  # torch tensor
+        if hasattr(x, "cpu"):  # torch tensor (may be bf16 under autocast; numpy has no bf16)
+            if hasattr(x, "is_floating_point") and x.is_floating_point():
+                x = x.float()
             x = x.cpu().numpy()
         if hasattr(x, "tolist"):  # numpy array
             return x.tolist()
