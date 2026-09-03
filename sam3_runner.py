@@ -24,6 +24,46 @@ Propagation goes through handle_stream_request (a generator of
 from __future__ import annotations
 
 
+def checkpoint_variant(checkpoint: str) -> str:
+    """Peek at the state-dict keys (mmap, no GPU) and classify the presence mechanism.
+
+    "decoder_presence_token": Meta's release sam3.pt (detector.transformer.decoder.presence_token.*)
+    "seg_head_presence":      SA-FARI fine-tunes (detector.segmentation_head.presence_head.*)
+    "unknown":                neither (loaded with the builder defaults)
+    """
+    import torch
+
+    sd = torch.load(checkpoint, map_location="cpu", mmap=True, weights_only=False)
+    if isinstance(sd, dict) and "model" in sd:
+        sd = sd["model"]
+    keys = list(sd.keys())
+    if any(k.startswith("detector.segmentation_head.presence_head.") for k in keys):
+        return "seg_head_presence"
+    if any(k.startswith("detector.transformer.decoder.presence_token") for k in keys):
+        return "decoder_presence_token"
+    return "unknown"
+
+
+def _patch_segmentation_head_with_presence():
+    """Make model_builder._create_segmentation_head build a UniversalSegmentationHead with
+    presence_head=True and a DotProductScoring scorer (keys presence_head.{prompt_mlp,prompt_proj,
+    hs_proj}), matching the SA-FARI checkpoints. Idempotent. Note the video inference path never
+    reads the head's presence_logit, so this only exists to satisfy strict state-dict loading."""
+    from sam3 import model_builder as mb
+
+    if getattr(mb, "_presence_head_patched", False):
+        return
+    orig = mb._create_segmentation_head
+
+    def patched(*args, **kwargs):
+        head = orig(*args, **kwargs)
+        head.presence_head = mb._create_dot_product_scoring()
+        return head
+
+    mb._create_segmentation_head = patched
+    mb._presence_head_patched = True
+
+
 class Sam3Runner:
     def __init__(self, checkpoint: str, device: str = "cuda", score_thresh: float | None = None):
         self.checkpoint = checkpoint
@@ -38,10 +78,19 @@ class Sam3Runner:
 
         # Confirmed against the installed package (sam3 0.1.0, 2026-09-03): build_sam3_video_predictor
         # returns Sam3VideoPredictorMultiGPU(*args, gpus_to_use=None, **kwargs) whose per-GPU
-        # Sam3VideoPredictor.__init__(checkpoint_path=None, bpe_path=None, ..., compile=False) calls
-        # build_sam3_video_model(checkpoint_path=...) and .cuda()s the model. The HF download only
-        # happens when checkpoint_path is None, so a local .pt path is enough (no load_from_HF kwarg).
-        predictor = build_sam3_video_predictor(checkpoint_path=self.checkpoint)
+        # Sam3VideoPredictor.__init__(checkpoint_path=None, bpe_path=None, has_presence_token=True,
+        # ..., compile=False) calls build_sam3_video_model(checkpoint_path=...) and .cuda()s the model.
+        # The HF download only happens when checkpoint_path is None.
+        variant = checkpoint_variant(self.checkpoint)
+        kwargs = dict(checkpoint_path=self.checkpoint)
+        if variant == "seg_head_presence":
+            # SA-FARI fine-tunes (sam3-safari-*.pt): no decoder presence token, but a
+            # DotProductScoring presence head on the segmentation head. The builder has a flag for
+            # the former and hard-codes presence_head=False for the latter, so patch the head factory.
+            kwargs["has_presence_token"] = False
+            _patch_segmentation_head_with_presence()
+        print(f"sam3_runner: checkpoint variant={variant} kwargs={kwargs}", flush=True)
+        predictor = build_sam3_video_predictor(**kwargs)
         self._predictor = predictor
         return predictor
 
