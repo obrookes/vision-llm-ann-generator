@@ -137,17 +137,25 @@ distribution rather than fighting it.
 
 ## Measured (2026-09-03, 1 GH200, prompt "chimpanzee", sam3-safari-pos.pt)
 
-<!-- 6 fps video/image rows to be added after dev8 reruns -->
+| smoke, `--sample-fps 6`, video mode (job 6274195) | 1 | 364 | 1 min 26 s | 4.3 | 0.70 |
+| smoke, `--sample-fps 6`, image mode (job 6274229) | 1 | 364 | 43 s | 8.8 | 1.40 |
+| dev8, `--sample-fps 6`, video mode (job 6274234) | 8 | 2912 | 5 min 49 s | 9.2 | 1.38 |
+| dev8, `--sample-fps 6`, image mode (job 6274289) | 8 | 2912 | 4 min 14 s | 12.2 | 1.89 |
+
+At the 6 fps default, dev8 costs 43.6 s/clip in video mode (3.8x faster than every-frame) and
+31.8 s/clip in image mode, i.e. ~720 GPU-h (video) or ~530 GPU-h (image) for the 59,656-clip
+corpus, from ~2700 GPU-h before. fps columns are sampled frames per second of tracking time
+(`fps_processed`); wall includes ~1 min engine start per task. Track counts on dev8 differ
+between modes only because image-mode "tracks" are per-frame detection slots.
 
 | run | clips | frames | wall | fps | videos/min/GPU |
 |---|---|---|---|---|---|
 | smoke (03190251.MP4, 720x404 @ 24 fps, first run incl. Triton compile) | 1 | 1454 | 5 min 32 s | 4.4 | 0.18 |
 | dev8 (corpus MP4s, `manifests/dev8.txt`) | 8 | 11632 | 22 min | 8.9 | 0.37 |
 
-Engine start (model load + Triton NMS kernel compile) is ~1 min per task. SAM3 runs every frame
-at 1008 px, so a clip costs ~2.7 GPU-min and the 59,656-clip corpus would be ~2719 GPU-h
-(~680 node-h) at this rate. Frame subsampling / lower resolution are the obvious levers
-and are not implemented yet. Smoke clip: 8 tracks, max 6 concurrent, 2.5 MB tracks JSON, 29 MB overlay.
+Engine start (model load + Triton NMS kernel compile) is ~1 min per task. The first two rows
+ran every source frame (the pre-`--sample-fps` default): ~2.7 GPU-min per clip, ~2700 GPU-h
+for the corpus. Smoke clip: 8 tracks, max 6 concurrent, 2.5 MB tracks JSON, 29 MB overlay.
 
 ## Gotchas
 
