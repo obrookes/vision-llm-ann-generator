@@ -18,18 +18,27 @@ overlay clips + manifests that repo *reviews*.
   codec, JSON read/write, `stem_for()` path flattening, `summarise()`.
 - `manifest.py` — build manifests: walk a video dir -> `videos.txt`, or list an
   `annotate.py` output dir's overlays -> a verifier-ready manifest.
-- `container/sam3.def` — Apptainer definition (built by another agent).
-- `slurm/` — `run.sh` / `submit.sbatch` / `build_sif.sbatch` (written by another agent).
+- `container/` — `sam3.def` (NGC PyTorch 25.06 arm64 + sam3), `build_sandbox.sh`, README with the
+  build gotchas.
+- `slurm/` — `run.sh` / `submit.sbatch` / `build_sif.sbatch`.
+- `tools/container_check.py` — python/torch/cuda/sam3 import check inside the container.
 - `manifests/` — `smoke.txt`, `dev8.txt`, `dev32.txt`.
 - `outputs/` — gitignored; per-run subdirectories go here.
 - `docs/OUTPUT_SCHEMA.md` — the tracks JSON / `index.jsonl` contract shared with the
   verifier.
 
-## Setup
+## Setup (Isambard-AI)
 
-- Weights: copy `~/Unmarked-Anything/weights/sam3/*.pt` to
-  `$SCRATCH/weights/sam3/` (default checkpoint used is `sam3-safari-pos.pt`).
-- Container/env: see `container/sam3.def` and `slurm/` (built separately).
+```bash
+# weights (base + three SA-FARI fine-tunes, 3.4 GB each); default is sam3-safari-pos.pt
+mkdir -p $SCRATCH/weights/sam3 && cp ~/Unmarked-Anything/weights/sam3/*.pt $SCRATCH/weights/sam3/
+# container: sandbox on login-node local disk -> tarball on $SCRATCH -> SIF built in a job (~35 min total)
+setsid -f nohup container/build_sandbox.sh > $SCRATCH/logs/build-sam3-sandbox.log 2>&1 < /dev/null
+NAME=sam3 sbatch slurm/build_sif.sbatch        # -> $SCRATCH/containers/sam3.sif (12.8 GB)
+```
+
+`container/README.md` explains why the build is shaped like that (Lustre chown refusal, scratch
+inode quota, tmpfs `/tmp` on nodes).
 
 ## Usage
 
@@ -65,7 +74,7 @@ Render (or re-render) an overlay from an existing tracks JSON directly:
 python overlay.py outputs/dev32_animal/<stem>.json --out /tmp/preview.mp4
 ```
 
-## Slurm (planned knobs)
+## Slurm
 
 `slurm/submit.sbatch` runs `slurm/run.sh`, which reads:
 
@@ -76,9 +85,38 @@ python overlay.py outputs/dev32_animal/<stem>.json --out /tmp/preview.mp4
 - `SIF` — path to the built Apptainer image.
 - `EXTRA_ARGS` — passed through to `annotate.py` verbatim.
 
+```bash
+PROMPT=chimpanzee sbatch slurm/submit.sbatch                                   # smoke: 1 clip
+MANIFEST=manifests/dev32.txt PROMPT=animal sbatch --array=0-3 slurm/submit.sbatch  # 4 GPUs, 8 clips each
+```
+
 Mirrors this repo's sibling verifier's `slurm/run_vllm.sh` conventions (thin sbatch
 header, `awk 'NR % n == i'` sharding, `APPTAINERENV_*` exports, `TMPDIR=/tmp` forced
 inside the container).
+
+## Measured (2026-09-03, smoke clip 03190251.MP4, 1454 frames @ 24 fps, 720x404, 1 GH200)
+
+| phase | time |
+|---|---|
+| engine start (model load + Triton NMS kernel compile, first run) | ~1 min |
+| track 1454 frames, prompt "chimpanzee" | 5 min 09 s (~4.7 fps) |
+
+8 tracks, max 6 concurrent, 2.5 MB tracks JSON, 29 MB overlay mp4. SAM3 runs every frame at
+1008 px, so a 60 s clip costs ~5 GPU-min; the 60k corpus would be ~5000 GPU-h at this rate.
+Frame subsampling / lower resolution are the obvious levers and are not implemented yet.
+
+## Gotchas
+
+- **SA-FARI checkpoints are a different SAM3 variant** from Meta's `sam3.pt`: no decoder presence
+  token, but a DotProductScoring presence head on the segmentation head. `sam3_runner.py` detects
+  this from the state-dict keys and patches the two builder factories so strict loading passes
+  (sam3 0.1.0's `has_presence_token` flag is ignored by its own transformer builder). The video
+  inference path never reads the seg-head presence logit, so it only matters for loading.
+- **Triton needs `libcuda.so`**: inside the NGC image `ldconfig -p` points at a compat dir that
+  is absent on the node, and `apptainer --nv` only provides `libcuda.so.1`. `run.sh` creates
+  `$SCRATCH/lib/triton-libcuda/{libcuda.so,libcuda.so.1}` -> `/.singularity.d/libs/libcuda.so.1`
+  and sets `TRITON_LIBCUDA_PATH` to it.
+- `annotate.py` uses a single predictor per process; each array task is one GPU.
 
 ## Output contract
 
