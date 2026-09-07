@@ -15,6 +15,7 @@ fi
 CHECKPOINT="${CHECKPOINT:-$SCRATCH/weights/sam3/sam3-safari-pos.pt}"
 MODE="${MODE:-video}"
 SAMPLE_FPS="${SAMPLE_FPS:-6}"
+FRAMES_CSV="${FRAMES_CSV:-}"
 
 SIF="${SIF:-$SCRATCH/containers/sam3.sif}"
 [ -e "$SIF" ] || SIF="$SCRATCH/containers/sam3-sandbox"   # login-node mksquashfs fails (pids limit); sandbox works too
@@ -59,7 +60,10 @@ if command -v nvidia-smi >/dev/null 2>&1; then
     GPUS=$(nvidia-smi -L | wc -l)
 fi
 
-echo "== run.sh: MANIFEST=$SHARD PROMPT=$PROMPT CHECKPOINT=$CHECKPOINT MODE=$MODE SAMPLE_FPS=$SAMPLE_FPS OUT=$OUT SIF=$SIF task=${I}/${N} GPUs=$GPUS =="
+FRAMES_CSV_ARGS=()
+[ -n "$FRAMES_CSV" ] && FRAMES_CSV_ARGS=(--frames-csv "$FRAMES_CSV")
+
+echo "== run.sh: MANIFEST=$SHARD PROMPT=$PROMPT CHECKPOINT=$CHECKPOINT MODE=$MODE SAMPLE_FPS=$SAMPLE_FPS FRAMES_CSV=$FRAMES_CSV OUT=$OUT SIF=$SIF task=${I}/${N} GPUs=$GPUS =="
 
 START=$(date +%s)
 
@@ -72,6 +76,7 @@ apptainer exec --nv --bind "/lus,/scratch,$HOME" "$SIF" \
         --sample-fps "$SAMPLE_FPS" \
         --out "$OUT" \
         --index-name "index_${I}_of_${N}.jsonl" \
+        "${FRAMES_CSV_ARGS[@]}" \
         ${EXTRA_ARGS}
 
 STATUS=$?

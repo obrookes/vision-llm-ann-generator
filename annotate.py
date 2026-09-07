@@ -3,6 +3,7 @@
     python annotate.py --manifest manifests/dev32.txt --prompt animal --out outputs/dev32_animal \
         [--checkpoint $SCRATCH/weights/sam3/sam3-safari-pos.pt] [--score-thresh 0.5] \
         [--mode video|image] [--sample-fps 6] [--overlay-all-frames] \
+        [--frames-csv annotations.csv] [--extra-frames 26,75] [--stop-after-last-extra-s 5.0] \
         [--max-frames N] [--no-overlay] [--overwrite] [--video-dir DIR instead of --manifest]
 
 Per video: run sam3_runner.Sam3Runner.track once (predictor loaded once per process, one
@@ -16,6 +17,14 @@ By default only every ~4th-5th source frame is decoded and run through the model
 (--sample-fps 6, matching SAM3's training/eval fps; 0 = every source frame), and the
 overlay video is rendered from just those sampled frames (--overlay-all-frames renders
 every source frame, holding the most recent annotation in between).
+
+Specific source frames (e.g. ones a human annotator labelled) can be forced into the
+sampled set even when they don't fall on the sample_fps grid: --frames-csv PATH matches
+rows to each video by basename (manifest.frames_by_video) and --extra-frames "26,75,..."
+applies the same ad hoc set of source-frame indices to every video in the run; both can be
+given together (they're unioned per video). --stop-after-last-extra-s SECONDS stops
+decoding SECONDS*fps source frames after the last extra frame requested for that video
+(default: decode the whole video).
 """
 from __future__ import annotations
 
@@ -25,13 +34,15 @@ import os
 import time
 from pathlib import Path
 
-from manifest import read_manifest, from_video_dir
+from manifest import read_manifest, from_video_dir, frames_by_video
 from tracks import stem_for, write_tracks, summarise
 
 
 def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir: Path,
                    stem: str, score_thresh, max_frames, no_overlay: bool,
-                   overlay_all_frames: bool) -> dict:
+                   overlay_all_frames: bool, extra_frames: set[int] | None = None,
+                   frames_csv: str | None = None,
+                   stop_after_last_extra_s: float | None = None) -> dict:
     t0 = time.perf_counter()
     import cv2
 
@@ -44,7 +55,15 @@ def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir
     n_frames_src = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     cap.release()
 
-    frame_results, track_meta = runner.track(video_path, prompt, max_frames=max_frames)
+    extra_frames = extra_frames or set()
+    stop_after = None
+    if stop_after_last_extra_s is not None and extra_frames:
+        stop_after = int(round(max(extra_frames) + stop_after_last_extra_s * fps))
+
+    frame_results, track_meta = runner.track(
+        video_path, prompt, max_frames=max_frames,
+        extra_indices=extra_frames, stop_after=stop_after,
+    )
 
     from tracks import rle_encode
 
@@ -80,6 +99,8 @@ def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir
         "width": width,
         "height": height,
         "n_frames": n_frames_src,
+        "extra_frames": sorted(extra_frames),
+        "frames_csv": frames_csv,
         "frames": frames,
     }
 
@@ -129,6 +150,18 @@ def main():
     ap.add_argument("--overlay-all-frames", action="store_true",
                      help="render every source frame in the overlay (default: only the "
                           "sampled frames the model actually saw)")
+    ap.add_argument("--frames-csv", default=None,
+                     help="annotations CSV (columns include video_file, frame_idx); rows are "
+                          "matched to each video by basename and their frame_idx values are "
+                          "force-kept in the sampled frame set (manifest.frames_by_video)")
+    ap.add_argument("--extra-frames", default=None,
+                     help="comma-separated source-frame indices to force-keep for EVERY video "
+                          "in this run (ad hoc, unioned with --frames-csv if both given), "
+                          "e.g. '26,75'")
+    ap.add_argument("--stop-after-last-extra-s", type=float, default=None,
+                     help="stop decoding this many seconds (at that video's fps) after the "
+                          "last extra frame requested for that video; only applies to videos "
+                          "with at least one extra frame. Default: decode the whole video")
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--no-overlay", action="store_true")
     ap.add_argument("--overwrite", action="store_true")
@@ -149,6 +182,11 @@ def main():
     else:
         exts = [e.strip() for e in args.ext.split(",") if e.strip()]
         videos = from_video_dir(args.video_dir, exts)
+
+    csv_extra_by_video = frames_by_video(args.frames_csv) if args.frames_csv else {}
+    ad_hoc_extra = set()
+    if args.extra_frames:
+        ad_hoc_extra = {int(x) for x in args.extra_frames.split(",") if x.strip()}
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,10 +228,13 @@ def main():
         for video_path, stem in todo:
             rec = {"video": video_path, "stem": stem, "prompt": args.prompt, "checkpoint": os.path.basename(checkpoint)}
             try:
+                extra_frames = csv_extra_by_video.get(os.path.basename(video_path), set()) | ad_hoc_extra
                 stats = process_video(
                     runner, video_path, args.prompt, checkpoint, out_dir, stem,
                     args.score_thresh, args.max_frames, args.no_overlay,
                     args.overlay_all_frames,
+                    extra_frames=extra_frames, frames_csv=args.frames_csv,
+                    stop_after_last_extra_s=args.stop_after_last_extra_s,
                 )
                 rec.update(status="ok", **stats)
             except Exception as e:  # per-video failure: log, keep going

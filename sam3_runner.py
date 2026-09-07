@@ -281,8 +281,22 @@ class Sam3Runner:
         self._image_processor = processor
         return model, processor
 
-    def track(self, video_path: str, prompt: str, max_frames: int | None = None) -> tuple[list[dict], dict]:
+    def track(
+        self,
+        video_path: str,
+        prompt: str,
+        max_frames: int | None = None,
+        extra_indices=None,
+        stop_after: int | None = None,
+    ) -> tuple[list[dict], dict]:
         """Run SAM3 text-prompted detection/tracking over a (fps-subsampled) video.
+
+        `extra_indices` and `stop_after` are passed straight through to
+        `frames.decode_frames` (force-keep specific source frame indices even if they're off
+        the sampling grid; stop decoding after a given source index). SAM3 itself only ever
+        sees the resulting sampled frame list/positional indices, so nothing downstream of
+        decode_frames needs to know about them - the existing `frame_indices` mapping already
+        carries the (possibly irregular) source indices back onto SAM3's positional output.
 
         Returns (frames, meta):
             frames: list of per-frame dicts, `frame` = SOURCE video frame index:
@@ -294,7 +308,10 @@ class Sam3Runner:
         """
         from frames import decode_frames
 
-        frame_indices, pil_frames, src_fps = decode_frames(video_path, self.sample_fps, max_frames=max_frames)
+        frame_indices, pil_frames, src_fps = decode_frames(
+            video_path, self.sample_fps, max_frames=max_frames,
+            extra_indices=extra_indices, stop_after=stop_after,
+        )
         meta = {
             "src_fps": src_fps,
             "n_frames_sampled": len(frame_indices),

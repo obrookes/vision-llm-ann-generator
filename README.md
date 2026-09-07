@@ -48,6 +48,7 @@ CLI, on a GPU node (or inside the container):
 python annotate.py --manifest manifests/dev32.txt --prompt animal --out outputs/dev32_animal \
     [--checkpoint $SCRATCH/weights/sam3/sam3-safari-pos.pt] [--score-thresh 0.5] \
     [--mode video|image] [--sample-fps 6] [--overlay-all-frames] \
+    [--frames-csv annotations.csv] [--extra-frames 26,75] [--stop-after-last-extra-s 5.0] \
     [--max-frames N] [--no-overlay] [--overwrite] [--root /scratch/.../vids]
 # or: --video-dir DIR instead of --manifest
 ```
@@ -55,6 +56,15 @@ python annotate.py --manifest manifests/dev32.txt --prompt animal --out outputs/
 Resumable: re-running with the same `--out` skips videos whose `<out>/<stem>.json`
 already exists (unless `--overwrite`). Per-video errors are logged to `index.jsonl` with
 `status: "error"` and do not stop the run.
+
+`--frames-csv`/`--extra-frames` force specific source-frame indices into the sampled set
+even when they're off the `--sample-fps` grid (e.g. so a human-annotated frame lands in
+the tracks JSON exactly): `--frames-csv` matches rows to each video by basename
+(`manifest.frames_by_video`), `--extra-frames` applies the same ad hoc comma-separated
+indices to every video in the run, and both can be combined. `--stop-after-last-extra-s`
+optionally stops decoding a fixed number of seconds after the last extra frame requested
+for a video (default: decode the whole video). Recorded in the tracks JSON as
+`extra_frames`/`frames_csv` (see `docs/OUTPUT_SCHEMA.md`).
 
 Hand off the rendered overlays to the verifier:
 
@@ -85,10 +95,12 @@ python overlay.py outputs/dev32_animal/<stem>.json --out /tmp/preview.mp4  # [--
 - `MODE` — `video` (default) or `image`; see "Modes" below.
 - `SAMPLE_FPS` — default `6`; frame rate SAM3 processes the video at (subsampled from
   source fps). `0` processes every source frame.
+- `FRAMES_CSV` — optional; forwarded as `annotate.py --frames-csv`.
 - `OUT` — default `outputs/<manifest-stem>_<prompt>` (or `..._<prompt>_<mode>` when
   `MODE` is not `video`, so video and image runs don't collide).
 - `SIF` — path to the built Apptainer image.
-- `EXTRA_ARGS` — passed through to `annotate.py` verbatim.
+- `EXTRA_ARGS` — passed through to `annotate.py` verbatim (e.g. `--extra-frames`,
+  `--stop-after-last-extra-s`).
 
 ```bash
 PROMPT=chimpanzee sbatch slurm/submit.sbatch                                   # smoke: 1 clip

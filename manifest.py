@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 
@@ -42,6 +43,30 @@ def from_video_dir(video_dir: str, exts: list[str]) -> list[str]:
 def from_outputs(out_dir: str) -> list[str]:
     paths = [str(p.resolve()) for p in Path(out_dir).glob("*.mp4")]
     return sorted(paths)
+
+
+def frames_by_video(csv_path: str) -> dict[str, set[int]]:
+    """Read an annotations CSV (columns include `video_file`, `frame_idx`) and return
+    {basename(video_file): {int(frame_idx), ...}}.
+
+    Uses only the stdlib `csv` module (DictReader). Tolerates a CSV built by concatenating
+    several per-video exports that each carried their own header row: any data row whose
+    `video_file` value is literally "video_file" (i.e. a repeated header line) is skipped.
+    `frame_idx` is read via `int(float(...))` since it may be written as "26.0".
+    """
+    result: dict[str, set[int]] = {}
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            video_file = (row.get("video_file") or "").strip()
+            if not video_file or video_file == "video_file":
+                continue
+            frame_idx = row.get("frame_idx")
+            if frame_idx is None or frame_idx.strip() == "":
+                continue
+            key = Path(video_file).name
+            result.setdefault(key, set()).add(int(float(frame_idx)))
+    return result
 
 
 def main():
