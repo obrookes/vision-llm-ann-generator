@@ -32,6 +32,18 @@ from camtrapalign.extract import write_index, write_videos_table
 from camtrapalign.videos import probe_video
 
 # frame_assignments.csv columns that are pipeline-internal, not annotation attributes
+def _init_ocr(threads: int) -> None:
+    """Pre-build camtrap-align's cached RapidOCR engine with a bounded onnxruntime thread pool.
+    The default (-1) sizes each pool to every core on the node, so N workers on a Slurm allocation
+    oversubscribe the CPUs by orders of magnitude and OCR crawls."""
+    if threads <= 0:
+        return
+    import camtrapalign.ocr as ocr
+    from rapidocr_onnxruntime import RapidOCR
+
+    ocr._ENGINE = RapidOCR(intra_op_num_threads=threads, inter_op_num_threads=1)
+
+
 _INTERNAL = {
     "filepath", "file", "video_key", "annot_time", "transect", "cam", "cam_num", "video_id",
     "file_transect", "file_cam", "file_stem", "file_mission", "match_strategy", "duplicate_filepaths",
@@ -45,6 +57,8 @@ def main():
     ap.add_argument("--only", help="comma-separated substrings matched against video_key / local video name")
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--force", action="store_true", help="re-run OCR and rewrite JPEGs")
+    ap.add_argument("--ocr-threads", type=int, default=2,
+                    help="onnxruntime intra-op threads per worker (<=0: library default, all cores)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -103,9 +117,10 @@ def main():
         })
 
     if args.workers > 1:
-        with Pool(args.workers) as pool:
+        with Pool(args.workers, initializer=_init_ocr, initargs=(args.ocr_threads,)) as pool:
             results = pool.map(_process_video_task, tasks)
     else:
+        _init_ocr(args.ocr_threads)
         results = [_process_video_task(t) for t in tasks]
 
     new_rows, new_video_rows = [], []
