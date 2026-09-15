@@ -15,6 +15,7 @@ def decode_frames(
     max_frames: int | None = None,
     extra_indices=None,
     stop_after: int | None = None,
+    extra_only: bool = False,
 ):
     """Decode a video, keeping only the frames a sample_fps subsampling would keep, plus
     any explicitly requested extra source-frame indices.
@@ -34,6 +35,10 @@ def decode_frames(
     don't fall on the sampling grid (e.g. frames a human annotator labelled). Indices at or
     beyond the source frame count (or past `stop_after`) are silently ignored.
 
+    `extra_only`: keep ONLY the `extra_indices` frames (no sampling grid at all), and stop
+    decoding after the largest of them. Used to run SAM3 on exactly the human-annotated
+    frames. With no extra indices this keeps nothing.
+
     `stop_after`: optional int source-frame index; decoding stops once this source index has
     been grabbed, i.e. no frame with index > stop_after is considered. None (default, the
     existing behaviour) decodes to the end of the video.
@@ -48,6 +53,11 @@ def decode_frames(
     from PIL import Image
 
     extra_set = set(extra_indices) if extra_indices else set()
+    if extra_only:
+        if not extra_set:
+            return [], [], None
+        last_extra = max(extra_set)
+        stop_after = last_extra if stop_after is None else min(stop_after, last_extra)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -69,7 +79,10 @@ def decode_frames(
             if not ok:
                 break
 
-            if every_frame:
+            if extra_only:
+                keep = i in extra_set
+                bucket = last_bucket
+            elif every_frame:
                 keep = True
                 bucket = i
             else:

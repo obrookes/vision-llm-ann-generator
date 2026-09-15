@@ -88,3 +88,16 @@ def test_decode_frames_max_frames_unchanged(synthetic_video):
     indices, frames, src_fps = decode_frames(path, sample_fps, max_frames=3)
     assert len(indices) == 3
     assert len(frames) == 3
+
+
+def test_decode_frames_extra_only(synthetic_video):
+    path, n_frames, fps = synthetic_video
+    indices, frames, _ = decode_frames(path, 6.0, extra_indices={5, 21, 22, 999}, extra_only=True)
+    assert indices == [5, 21, 22]
+    assert len(frames) == 3
+
+
+def test_decode_frames_extra_only_without_extras_keeps_nothing(synthetic_video):
+    path, _, _ = synthetic_video
+    indices, frames, _ = decode_frames(path, 6.0, extra_only=True)
+    assert indices == [] and frames == []

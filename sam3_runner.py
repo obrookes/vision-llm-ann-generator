@@ -288,6 +288,7 @@ class Sam3Runner:
         max_frames: int | None = None,
         extra_indices=None,
         stop_after: int | None = None,
+        extra_only: bool = False,
     ) -> tuple[list[dict], dict]:
         """Run SAM3 text-prompted detection/tracking over a (fps-subsampled) video.
 
@@ -310,12 +311,12 @@ class Sam3Runner:
 
         frame_indices, pil_frames, src_fps = decode_frames(
             video_path, self.sample_fps, max_frames=max_frames,
-            extra_indices=extra_indices, stop_after=stop_after,
+            extra_indices=extra_indices, stop_after=stop_after, extra_only=extra_only,
         )
         meta = {
             "src_fps": src_fps,
             "n_frames_sampled": len(frame_indices),
-            "sample_fps": self.sample_fps if self.sample_fps else None,
+            "sample_fps": None if extra_only else (self.sample_fps if self.sample_fps else None),
             "mode": self.mode,
         }
         if not frame_indices:
