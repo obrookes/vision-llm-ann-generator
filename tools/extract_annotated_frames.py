@@ -53,6 +53,10 @@ _INTERNAL = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset-dir", required=True, type=Path)
+    ap.add_argument("--out-dir", type=Path, default=None,
+                    help="where to write frames/, annotated_frames_index.csv, videos.csv, ocr_cache.json "
+                         "(default: --dataset-dir, i.e. current in-place behaviour). "
+                         "frame_assignments.csv and videos/manifest.csv are always read from --dataset-dir.")
     ap.add_argument("--config", required=True, help="camtrap-align dataset YAML (ocr/output blocks only)")
     ap.add_argument("--only", help="comma-separated substrings matched against video_key / local video name")
     ap.add_argument("--workers", type=int, default=1)
@@ -63,6 +67,8 @@ def main():
 
     cfg = load_config(args.config)
     ds = args.dataset_dir.resolve()
+    out = args.out_dir.resolve() if args.out_dir else ds
+    out.mkdir(parents=True, exist_ok=True)
 
     fa = pd.read_csv(ds / "frame_assignments.csv", dtype=str, keep_default_na=False)
     fa["annot_time"] = pd.to_datetime(fa["annot_time"].replace("", None), errors="coerce")
@@ -78,7 +84,11 @@ def main():
         keys = [k for k in keys if any(t in k or t in local_by_key.get(k, "") for t in toks)]
     print(f"{len(keys)} video(s) selected", flush=True)
 
+    # Seed from the dataset dir's cache (read-only) so an --out-dir run reuses OCR results
+    # already computed there, but always write the merged cache under --out-dir.
     ocr_cache = load_json(ds / "ocr_cache.json", default={})
+    if out != ds:
+        ocr_cache = {**ocr_cache, **load_json(out / "ocr_cache.json", default={})}
     overrides = load_json(ds / "overrides.json", default={})
     ocr_cfg = OverlayConfig.from_config(cfg.ocr)
 
@@ -108,7 +118,7 @@ def main():
             "force": args.force,
             "no_ocr": False,
             "ocr_cfg": ocr_cfg,
-            "out_dir": ds,
+            "out_dir": out,
             "search_window_s": cfg.ocr.search_window_s,
             "attr_cols": attr_cols,
             "write_images": True,
@@ -134,11 +144,11 @@ def main():
               f"ok={s.get('ok')} verified={s.get('verified')} corrected={s.get('corrected')} "
               f"unverified={s.get('unverified')} not_found={s.get('not_found')} "
               f"out_of_range={s.get('out_of_range')} {r.get('error', '')}", flush=True)
-    save_json(ds / "ocr_cache.json", ocr_cache)
+    save_json(out / "ocr_cache.json", ocr_cache)
 
     # merge with rows from earlier runs, replacing any re-processed video_key
     done = {t["video_key"] for t in tasks}
-    index_path, videos_path = ds / "annotated_frames_index.csv", ds / "videos.csv"
+    index_path, videos_path = out / "annotated_frames_index.csv", out / "videos.csv"
     new_index = write_index(new_rows, index_path.with_suffix(".new.csv"), attr_cols=attr_cols)
     new_videos = write_videos_table(new_video_rows, videos_path.with_suffix(".new.csv"))
     for path, new in ((index_path, new_index), (videos_path, new_videos)):
