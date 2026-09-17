@@ -1,0 +1,5 @@
+/scratch/b5bd/obrookes.b5bd/original-videos/vids-mission_2_phase_3_pss-EQUIPE_4-Transect_19-19_cam051_156497_1135890_20240308-03140014.MOV
+/scratch/b5bd/obrookes.b5bd/original-videos/vids-mission_2_phase_3_pss-EQUIPE_4-Transect_19-19_cam051_156497_1135890_20240308-04250103.MOV
+/scratch/b5bd/obrookes.b5bd/original-videos/vids-mission_3_phase_3_pss-EQUIPE_2-T158-158_Cam041_209542_1107663_20240624-06260008.MP4
+/scratch/b5bd/obrookes.b5bd/original-videos/vids-mission_3_phase_3_pss-EQUIPE_4-T177-177_Cam019_228808_1107740_20240626-08130158.MP4
+/scratch/b5bd/obrookes.b5bd/original-videos/vids-mission_4_phase_3_pss-#Mamady-T-192-192_Cam070_137270_1131014_20240811-08120003.MP4

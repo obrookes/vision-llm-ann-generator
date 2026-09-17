@@ -32,6 +32,8 @@ collisions across cameras/missions in the corpus (e.g.
   "mode": "video",
   "sample_fps": 6.0,
   "n_frames_sampled": 360,
+  "extra_frames": [26, 75],
+  "frames_csv": "/scratch/.../annotations_all.csv",
   "frames": [
     {
       "frame": 0,
@@ -69,6 +71,13 @@ Field notes:
   video's fps.
 - `n_frames_sampled` — optional, the number of frames actually processed (i.e. the
   length of `frames` when tracking wasn't truncated by `--max-frames`).
+- `extra_frames` — optional, sorted list of source-frame indices explicitly requested for
+  this video via `--frames-csv`/`--extra-frames` (the union of both, whether or not each
+  index was actually reachable in the video), so that a downstream consumer can tell
+  which entries in `frames` are "always on the sampling grid" vs. "force-kept to match a
+  human annotation". Empty list/absent when neither flag was used.
+- `frames_csv` — optional, the `--frames-csv` path given for this run (`null`/absent if
+  not used). Kept as given on the command line, not resolved/copied.
 - `frames` — one entry per tracked/processed frame, **in ascending frame order**. Frames
   with no detected objects are still listed, with `"objects": []` — do not assume a
   missing frame index means "no objects"; a genuinely absent frame index means tracking

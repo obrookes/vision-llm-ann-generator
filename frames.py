@@ -9,23 +9,45 @@ from __future__ import annotations
 import math
 
 
-def decode_frames(video_path: str, sample_fps: float | None, max_frames: int | None = None):
-    """Decode a video, keeping only the frames a sample_fps subsampling would keep.
+def decode_frames(
+    video_path: str,
+    sample_fps: float | None,
+    max_frames: int | None = None,
+    extra_indices=None,
+    stop_after: int | None = None,
+):
+    """Decode a video, keeping only the frames a sample_fps subsampling would keep, plus
+    any explicitly requested extra source-frame indices.
 
     Source frame i is kept when floor(i * sample_fps / src_fps) is strictly greater than
     the bucket value of the last kept frame (frame 0 is always kept, since its bucket is
-    0 > -1). If sample_fps is None/0, or >= src_fps, every frame is kept (stride 1).
+    0 > -1), OR when `i in extra_indices`. `last_bucket` only advances on an actual bucket
+    increase (never on an extra-index-only keep), so the regular sampling grid is exactly
+    the same set of indices regardless of which extra indices are requested. If sample_fps
+    is None/0, or >= src_fps, every frame is kept (stride 1), and extra_indices is then a
+    no-op (already a subset of "every frame").
 
     Skipped frames are only cap.grab()'d (cheap, no decode); kept frames are cap.retrieve()'d
     and converted BGR -> RGB -> PIL.Image. Stops early once max_frames frames have been kept.
 
+    `extra_indices`: optional iterable of int source-frame indices to force-keep even if they
+    don't fall on the sampling grid (e.g. frames a human annotator labelled). Indices at or
+    beyond the source frame count (or past `stop_after`) are silently ignored.
+
+    `stop_after`: optional int source-frame index; decoding stops once this source index has
+    been grabbed, i.e. no frame with index > stop_after is considered. None (default, the
+    existing behaviour) decodes to the end of the video.
+
     Returns (frame_indices, frames, src_fps):
-        frame_indices: list[int], the source-video indices of the kept frames
+        frame_indices: list[int], the source-video indices of the kept frames, in ascending
+            order (extra indices are interleaved in order alongside the regular grid)
         frames: list[PIL.Image.Image], RGB
         src_fps: float, the source video's reported fps (falls back to 24.0 if cv2 reports 0)
     """
     import cv2
     from PIL import Image
+
+    extra_set = set(extra_indices) if extra_indices else set()
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -40,6 +62,9 @@ def decode_frames(video_path: str, sample_fps: float | None, max_frames: int | N
     i = 0
     try:
         while True:
+            if stop_after is not None and i > stop_after:
+                break
+
             ok = cap.grab()
             if not ok:
                 break
@@ -49,7 +74,7 @@ def decode_frames(video_path: str, sample_fps: float | None, max_frames: int | N
                 bucket = i
             else:
                 bucket = int(math.floor(i * sample_fps / src_fps))
-                keep = bucket > last_bucket
+                keep = bucket > last_bucket or i in extra_set
 
             if keep:
                 ok2, frame_bgr = cap.retrieve()
@@ -58,7 +83,8 @@ def decode_frames(video_path: str, sample_fps: float | None, max_frames: int | N
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                 frames.append(Image.fromarray(frame_rgb))
                 frame_indices.append(i)
-                last_bucket = bucket
+                if not every_frame and bucket > last_bucket:
+                    last_bucket = bucket
                 if max_frames is not None and len(frame_indices) >= max_frames:
                     break
 
