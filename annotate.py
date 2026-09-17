@@ -42,7 +42,8 @@ def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir
                    stem: str, score_thresh, max_frames, no_overlay: bool,
                    overlay_all_frames: bool, extra_frames: set[int] | None = None,
                    frames_csv: str | None = None,
-                   stop_after_last_extra_s: float | None = None) -> dict:
+                   stop_after_last_extra_s: float | None = None,
+                   extra_frames_only: bool = False) -> dict:
     t0 = time.perf_counter()
     import cv2
 
@@ -62,7 +63,7 @@ def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir
 
     frame_results, track_meta = runner.track(
         video_path, prompt, max_frames=max_frames,
-        extra_indices=extra_frames, stop_after=stop_after,
+        extra_indices=extra_frames, stop_after=stop_after, extra_only=extra_frames_only,
     )
 
     from tracks import rle_encode
@@ -101,6 +102,7 @@ def process_video(runner, video_path: str, prompt: str, checkpoint: str, out_dir
         "n_frames": n_frames_src,
         "extra_frames": sorted(extra_frames),
         "frames_csv": frames_csv,
+        "extra_frames_only": extra_frames_only,
         "frames": frames,
     }
 
@@ -162,6 +164,9 @@ def main():
                      help="stop decoding this many seconds (at that video's fps) after the "
                           "last extra frame requested for that video; only applies to videos "
                           "with at least one extra frame. Default: decode the whole video")
+    ap.add_argument("--extra-frames-only", action="store_true",
+                    help="process ONLY the --frames-csv/--extra-frames indices (no --sample-fps grid); "
+                         "videos with no requested frames get an empty frames list")
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--no-overlay", action="store_true")
     ap.add_argument("--overwrite", action="store_true")
@@ -235,6 +240,7 @@ def main():
                     args.overlay_all_frames,
                     extra_frames=extra_frames, frames_csv=args.frames_csv,
                     stop_after_last_extra_s=args.stop_after_last_extra_s,
+                    extra_frames_only=args.extra_frames_only,
                 )
                 rec.update(status="ok", **stats)
             except Exception as e:  # per-video failure: log, keep going
